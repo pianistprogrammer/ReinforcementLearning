@@ -22,7 +22,7 @@ async def local_origin(request, handler):
     if host not in {'localhost', '127.0.0.1', '::1'}:
         raise web.HTTPForbidden(text='This workspace accepts local requests only')
     origin = request.headers.get('Origin')
-    if origin and origin != f'{request.scheme}://{request.host}':
+    if origin and urlsplit(origin).hostname not in {'localhost', '127.0.0.1', '::1'}:
         raise web.HTTPForbidden(text='Use the workspace from the same origin')
     return await handler(request)
 
@@ -30,7 +30,8 @@ async def local_origin(request, handler):
 def create_app(run_dir=None, static_dir=None):
     resolved_run_dir = (run_dir or Path('artifacts/web-runs')).resolve()
     app = web.Application(middlewares=[local_origin], client_max_size=10 * 1024 * 1024)
-    sio = socketio.AsyncServer(async_mode='aiohttp', max_http_buffer_size=64 * 1024)
+    sio = socketio.AsyncServer(async_mode='aiohttp', max_http_buffer_size=64 * 1024,
+                               cors_allowed_origins='*')
     sio.attach(app)
     manager = RunManager(sio, resolved_run_dir)
     app[MANAGER], app[SOCKET] = manager, sio

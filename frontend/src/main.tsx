@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {io, type Socket} from 'socket.io-client';
-import {Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleHelp, Code2, Cpu, FlaskConical, History, Layers3, LoaderCircle, Play, Plus, Radio, RotateCcw, Settings2, Square, Terminal, Waypoints, WifiOff, X, Zap} from 'lucide-react';
+import {Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleHelp, Code2, Cpu, FlaskConical, History, Layers3, LoaderCircle, Moon, Play, Plus, Radio, RotateCcw, Settings2, Square, Sun, Terminal, Waypoints, WifiOff, X, Zap} from 'lucide-react';
 import {applyEvent, type Catalog, type Config, type Generation, type HFInspect, type Metric, type Run, type RunEvent, type Summary} from './types';
 import './styles.css';
 
@@ -33,6 +33,18 @@ function App() {
   const [hfInspecting, setHfInspecting] = useState(false);
   const [hfDatasetMode, setHfDatasetMode] = useState<'hf' | 'upload'>('hf');
   const [hfUploading, setHfUploading] = useState(false);
+  const [theme, setTheme] = useState<'dark'|'light'>(() => (localStorage.getItem('reinforce-theme') as 'dark'|'light') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('reinforce-theme', theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    document.documentElement.classList.add('theme-transitioning');
+    setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 300);
+    setTheme(t => t === 'dark' ? 'light' : 'dark');
+  }
   const socket = useRef<Socket | null>(null);
   const selected = useRef<string | null>(null);
   const output = useRef<HTMLPreElement>(null);
@@ -121,7 +133,7 @@ function App() {
       <div className="sidebar-bottom"><div className="local-notice"><Cpu size={17}/><div>Built to run locally<small>Your compute. Your workspace.</small></div></div><button className="help-button" onClick={() => setHelp(true)}><CircleHelp size={17}/>Workspace guide<ArrowUpRight size={14}/></button></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{page === 'history' ? 'Run history' : 'Run workspace'}</strong></div><div className={`connection ${connected ? '' : 'offline'}`}>{connected ? <span className="live-dot"/> : <WifiOff size={13}/>} {connected ? 'Backend connected' : 'Reconnecting'}<span className="connection-divider"/><span>LOCAL</span></div></header>
+      <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{page === 'history' ? 'Run history' : 'Run workspace'}</strong></div><div className="topbar-right"><div className={`connection ${connected ? '' : 'offline'}`}>{connected ? <span className="live-dot"/> : <WifiOff size={13}/>} {connected ? 'Backend connected' : 'Reconnecting'}<span className="connection-divider"/><span>LOCAL</span></div><button className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? <Sun size={16}/> : <Moon size={16}/>}</button></div></header>
       <main>
         <div className="page-heading"><div><div className="eyebrow">EXPERIMENT CONTROL</div><h1>{page === 'history' ? 'Run history' : 'Run workspace'}</h1><p>{page === 'history' ? 'Every experiment, ready to revisit.' : 'From the first token to the final update. Follow it all, live.'}</p></div><div className="heading-actions"><button className="mobile-history" aria-label="Run history" onClick={() => setPage(page === 'history' ? 'workspace' : 'history')}><History size={15}/></button><button className="secondary-button" onClick={newRun}><Plus size={16}/>New run</button></div></div>
         {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16}/></button></div>}
