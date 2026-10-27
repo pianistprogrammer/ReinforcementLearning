@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "experimental-mlx-reward-training"
+version = "0.1.0"
+description = "Experimental GRPO-style reward training for MLX-LM compatible models"
+requires-python = ">=3.10"
+dependencies = ["mlx>=0.25", "mlx-lm>=0.24", "numpy>=1.24", "datasets>=3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+web = ["aiohttp>=3.10,<4", "python-socketio>=5.11,<6"]
+
+[project.scripts]
+rl-web = "rl_framework.web.server:main"
+
+[tool.setuptools.package-data]
+"rl_framework.web" = ["static/*", "static/assets/*"]
+
+[tool.setuptools.packages.find]
+include = ["rl_framework*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

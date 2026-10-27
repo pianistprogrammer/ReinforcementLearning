@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+frontend/node_modules/
+artifacts/
+build/
+dist/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.safetensors
+*.gguf
