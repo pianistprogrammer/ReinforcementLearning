@@ -34,6 +34,8 @@ def parse_args(argv=None):
     parser.add_argument('--max_tokens', '--max-tokens', dest='max_tokens', type=int)
     parser.add_argument('--temp', type=float)
     parser.add_argument('--allow-unsafe-code', action='store_true', help='execute generated code WITHOUT a sandbox')
+    parser.add_argument('--task-params', type=json.loads, default={},
+                        help='JSON dict forwarded as kwargs to the task constructor')
     parser.add_argument('--output-dir', type=Path, default=Path('artifacts'))
     args = parser.parse_args(argv)
     task_class = load_task_class(args.task)
@@ -54,6 +56,8 @@ def main(argv=None):
             raise SystemExit('Refusing generated code execution: pass --allow-unsafe-code. Subprocess is NOT a sandbox.')
         print('WARNING: executing generated code with your user privileges; subprocess is NOT a sandbox.')
     kwargs = {'allow_unsafe_code': args.allow_unsafe_code} if getattr(task_class, 'executes_generated_code', False) else {}
+    if args.task_params:
+        kwargs.update(args.task_params)
     task = task_class(**kwargs)
     if args.action == 'preview':
         result = task.preview()

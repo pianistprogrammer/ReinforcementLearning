@@ -1,5 +1,7 @@
 """Local Socket.IO dashboard: python -m rl_framework.web.server"""
 import argparse
+import hashlib
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,10 +28,11 @@ async def local_origin(request, handler):
 
 
 def create_app(run_dir=None, static_dir=None):
-    app = web.Application(middlewares=[local_origin], client_max_size=64 * 1024)
+    resolved_run_dir = (run_dir or Path('artifacts/web-runs')).resolve()
+    app = web.Application(middlewares=[local_origin], client_max_size=10 * 1024 * 1024)
     sio = socketio.AsyncServer(async_mode='aiohttp', max_http_buffer_size=64 * 1024)
     sio.attach(app)
-    manager = RunManager(sio, run_dir or Path('artifacts/web-runs').resolve())
+    manager = RunManager(sio, resolved_run_dir)
     app[MANAGER], app[SOCKET] = manager, sio
 
     @sio.event
@@ -82,6 +85,69 @@ def create_app(run_dir=None, static_dir=None):
         return web.FileResponse(run.directory / 'events.jsonl', headers={
             'Content-Disposition': f'attachment; filename="{run.id}-events.jsonl"'})
 
+    async def hf_inspect(request):
+        dataset_id = request.rel_url.query.get('dataset', '').strip()
+        split = request.rel_url.query.get('split', 'train').strip() or 'train'
+        if not dataset_id:
+            return web.json_response({'error': 'dataset parameter required'}, status=400)
+        if len(dataset_id) > 512 or any(ord(c) < 32 for c in dataset_id) or dataset_id.startswith('/'):
+            return web.json_response({'error': 'Invalid dataset identifier'}, status=400)
+        try:
+            from datasets import load_dataset
+            ds = load_dataset(dataset_id, split=f'{split}[:5]', trust_remote_code=False)
+
+            def _safe(v):
+                return str(v)[:200] if not isinstance(v, (str, int, float, bool, type(None))) else v
+
+            rows = [{k: _safe(v) for k, v in dict(row).items()} for row in ds]
+            return web.json_response({'columns': list(ds.column_names), 'sample_rows': rows})
+        except Exception as exc:
+            return web.json_response({'error': str(exc)}, status=400)
+
+    async def upload_dataset(request):
+        try:
+            reader = await request.multipart()
+            part = await reader.next()
+            if part is None:
+                return web.json_response({'error': 'No file received'}, status=400)
+            filename = part.filename or 'upload.csv'
+            suffix = Path(filename).suffix.lower()
+            if suffix not in {'.csv', '.jsonl', '.json'}:
+                return web.json_response({'error': 'Only .csv, .jsonl, and .json files are supported'}, status=400)
+            upload_dir = resolved_run_dir / 'uploads'
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = f'{int(time.time())}_{hashlib.md5(filename.encode()).hexdigest()[:8]}{suffix}'
+            dest = upload_dir / safe_name
+            size = 0
+            with open(dest, 'wb') as f:
+                while True:
+                    chunk = await part.read_chunk()
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 10 * 1024 * 1024:
+                        dest.unlink(missing_ok=True)
+                        return web.json_response({'error': 'File exceeds 10 MB limit'}, status=413)
+                    f.write(chunk)
+            try:
+                from datasets import load_dataset
+
+                def _safe(v):
+                    return str(v)[:200] if not isinstance(v, (str, int, float, bool, type(None))) else v
+
+                fmt = 'csv' if suffix == '.csv' else 'json'
+                ds = load_dataset(fmt, data_files=str(dest), split='train[:5]')
+                rows = [{k: _safe(v) for k, v in dict(row).items()} for row in ds]
+                columns = list(ds.column_names)
+            except Exception:
+                columns, rows = [], []
+            return web.json_response({'path': str(dest), 'filename': filename,
+                                      'columns': columns, 'sample_rows': rows})
+        except web.HTTPException:
+            raise
+        except Exception as exc:
+            return web.json_response({'error': str(exc)}, status=500)
+
     static = Path(static_dir) if static_dir else Path(__file__).parent / 'static'
 
     async def index(request):
@@ -93,6 +159,8 @@ def create_app(run_dir=None, static_dir=None):
     app.router.add_get('/api/runs', runs)
     app.router.add_get('/api/runs/{run_id}', snapshot)
     app.router.add_get('/api/runs/{run_id}/events', events)
+    app.router.add_get('/api/hf_inspect', hf_inspect)
+    app.router.add_post('/api/upload_dataset', upload_dataset)
     app.router.add_get('/', index)
     if (static / 'assets').is_dir():
         app.router.add_static('/assets/', static / 'assets')
