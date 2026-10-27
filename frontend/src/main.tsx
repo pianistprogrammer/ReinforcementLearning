@@ -33,11 +33,11 @@ function App() {
   const [hfInspecting, setHfInspecting] = useState(false);
   const [hfDatasetMode, setHfDatasetMode] = useState<'hf' | 'upload'>('hf');
   const [hfUploading, setHfUploading] = useState(false);
-  const [theme, setTheme] = useState<'dark'|'light'>(() => (localStorage.getItem('reinforce-theme') as 'dark'|'light') || 'dark');
+  const [theme, setTheme] = useState<'dark'|'light'>(() => (localStorage.getItem('reinforce-theme-v2') as 'dark'|'light') || 'light');
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('reinforce-theme', theme);
+    localStorage.setItem('reinforce-theme-v2', theme);
   }, [theme]);
 
   function toggleTheme() {
@@ -197,14 +197,14 @@ function Empty({icon,title,detail,extra}: {icon: ReactNode; title: string; detai
 function MetricCard({icon,title,value,suffix,foot,accent}: {icon: ReactNode; title: string; value: string; suffix?: string; foot: string; accent?: boolean}) {return <section className={`metric-card ${accent ? 'accent' : ''}`}><div className="metric-title">{title}{icon}</div><div className="metric-value mono">{value}<span>{suffix}</span></div><p>{foot}</p></section>;}
 function Chart({metrics,metric}: {metrics: Metric[]; metric: 'mean_reward' | 'loss'}) {
   const data = metrics.filter(m => Number.isFinite(m[metric]));
-  const width = 740, height = 190, left = 42, right = 16, top = 18, bottom = 27;
+  const width = 740, height = 200, left = 46, right = 16, top = 18, bottom = 28;
   const values = data.map(m => m[metric]);
   const min = Math.min(0,...values), max = Math.max(1,...values), span = max-min || 1;
   const lastStep = Math.max(1,data.at(-1)?.step ?? 200);
   const x = (step: number) => left + ((step-1) / Math.max(1,lastStep-1))*(width-left-right);
   const y = (v: number) => top + (1-(v-min)/span)*(height-top-bottom);
   const points = data.map(m => `${x(m.step)},${y(m[metric])}`).join(' ');
-  return <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric === 'loss' ? 'Loss' : 'Mean reward'} by training step`}><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#b8e59e" stopOpacity=".2"/><stop offset="100%" stopColor="#b8e59e" stopOpacity="0"/></linearGradient></defs>{[0,.25,.5,.75,1].map(v => <g key={v}><line x1={left} x2={width-right} y1={y(min+v*span)} y2={y(min+v*span)} stroke="#2b302d" strokeDasharray="3 5"/><text x={left-12} y={y(min+v*span)+4} textAnchor="end">{(min+v*span).toFixed(2)}</text></g>)}{[0,.25,.5,.75,1].map(v => <text key={v} x={left+v*(width-left-right)} y={height-5} textAnchor="middle">{Math.round(1+v*(lastStep-1))}</text>)}{!!data.length && <><polygon points={`${x(data[0].step)},${height-bottom} ${points} ${x(lastStep)},${height-bottom}`} fill="url(#chart-fill)"/><polyline points={points} fill="none" stroke="#b8e59e" strokeWidth="2.5" strokeLinejoin="round"/>{data.map(m => <circle key={m.step} cx={x(m.step)} cy={y(m[metric])} r={data.length < 30 ? 3 : 1.5} fill="#b8e59e"><title>Step {m.step}: {m[metric].toFixed(4)}</title></circle>)}</>}</svg>{!data.length && <div className="chart-empty"><Activity size={17}/><span>Metrics appear after the first training step</span></div>}<div className="chart-caption"><span><i/>{metric === 'loss' ? 'Sequence loss' : 'Mean group reward'}</span><span>Training step</span></div></div>;
+  return <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric === 'loss' ? 'Loss' : 'Mean reward'} by training step`}><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style={{stopColor:'var(--chart-line)'}} stopOpacity=".28"/><stop offset="100%" style={{stopColor:'var(--chart-line)'}} stopOpacity="0"/></linearGradient></defs>{[0,.25,.5,.75,1].map(v => <g key={v}><line className="chart-grid" x1={left} x2={width-right} y1={y(min+v*span)} y2={y(min+v*span)}/><text x={left-8} y={y(min+v*span)+4} textAnchor="end">{(min+v*span).toFixed(2)}</text></g>)}{[0,.25,.5,.75,1].map(v => <text key={v} x={left+v*(width-left-right)} y={height-6} textAnchor="middle">{Math.round(1+v*(lastStep-1))}</text>)}{!!data.length && <><polygon points={`${x(data[0].step)},${height-bottom} ${points} ${x(lastStep)},${height-bottom}`} fill="url(#chart-fill)"/><polyline className="chart-line" points={points} fill="none" strokeWidth="2" strokeLinejoin="round"/>{data.map(m => <circle className="chart-dot" key={m.step} cx={x(m.step)} cy={y(m[metric])} r={data.length < 30 ? 3.5 : 1.5}><title>Step {m.step}: {m[metric].toFixed(4)}</title></circle>)}</>}</svg>{!data.length && <div className="chart-empty"><Activity size={17}/><span>Metrics appear after the first training step</span></div>}<div className="chart-caption"><span><i/>{metric === 'loss' ? 'Sequence loss' : 'Mean group reward'}</span><span>Training step</span></div></div>;
 }
 
 createRoot(document.getElementById('root')!).render(<App/>);
