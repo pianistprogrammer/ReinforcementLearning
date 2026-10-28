@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import re
 import subprocess
 import sys
@@ -19,11 +20,16 @@ def _extract_code(completion: str) -> str:
 def _run_tests(code, tests, timeout=5, *, allow_unsafe_code=False):
     if not allow_unsafe_code:
         raise PermissionError('Generated code execution requires --allow-unsafe-code; subprocess is not a sandbox.')
+    project_root = str(Path(__file__).resolve().parents[2])
+    env = dict(os.environ)
+    env['PYTHONPATH'] = project_root + os.pathsep + env.get('PYTHONPATH', '')
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'candidate.py'
         path.write_text(code + '\n\n' + '\n'.join(tests))
         try:
-            result = subprocess.run([sys.executable, str(path)], capture_output=True, timeout=timeout)
+            result = subprocess.run([os.path.abspath(sys.executable), str(path)],
+                                    capture_output=True, timeout=timeout,
+                                    cwd=project_root, env=env)
             return result.returncode == 0
         except subprocess.TimeoutExpired:
             return False

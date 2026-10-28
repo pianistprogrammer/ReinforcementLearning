@@ -100,16 +100,19 @@ def main(argv=None):
     optimizer = optim.Adam(learning_rate=args.lr)
     if hasattr(task, 'evaluate'):
         evaluate('baseline')
+    enable_thinking = getattr(task, 'enable_thinking', None)
     for step in range(args.steps):
         with event_context(step=step + 1, phase='training'):
             emit('phase', phase='sampling', message=f'Sampling step {step + 1} / {args.steps}')
             prompt = task.make_prompt(tokenizer)
             completions, ids = sample_group(model, tokenizer, prompt, group_size=args.group,
-                                            max_tokens=args.max_tokens, temperature=args.temp)
+                                            max_tokens=args.max_tokens, temperature=args.temp,
+                                            enable_thinking=enable_thinking)
             emit('phase', phase='rewarding', message='Evaluating completions')
             rewards = [task.reward(completion)[0] for completion in completions]
             emit('phase', phase='updating', message='Updating LoRA adapters')
-            loss = grpo_step(model, ref_model, tokenizer, optimizer, prompt, completions, ids, rewards)
+            loss = grpo_step(model, ref_model, tokenizer, optimizer, prompt, completions, ids, rewards,
+                             enable_thinking=enable_thinking)
             emit('metric', loss=loss, mean_reward=sum(rewards) / len(rewards),
                  rewards=rewards, steps=args.steps)
         if step % 10 == 0:

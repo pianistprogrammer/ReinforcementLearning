@@ -78,8 +78,10 @@ def test_inspection_settings_and_final_board(tmp_path):
     with patch('rl_framework.core.models.sample_group', side_effect=sample):
         baseline = task.evaluate(None, None, phase='baseline')
         final = task.evaluate(None, None, phase='final', output_dir=tmp_path)
-    assert calls[0] == {'group_size': 3, 'max_tokens': 2048, 'temperature': .7}
-    assert calls[1] == {'group_size': 3, 'max_tokens': 512, 'temperature': .3}
+    assert calls[0] == {'group_size': 3, 'max_tokens': 2048, 'temperature': .7,
+                        'enable_thinking': False}
+    assert calls[1] == {'group_size': 3, 'max_tokens': 512, 'temperature': .3,
+                        'enable_thinking': False}
     assert len(baseline) == len(final) == 3
     assert all('board' in result for result in final)
     assert len(list(tmp_path.glob('*.html'))) == 3

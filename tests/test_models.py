@@ -142,6 +142,21 @@ def test_sampling_and_scoring_share_prompt_and_exact_generated_ids(family, finis
     assert tokenizer.encodings == [False, False]
 
 
+def test_enable_thinking_reaches_template_only_when_set():
+    calls = []
+
+    class Tokenizer:
+        chat_template = 'qwen'
+
+        def apply_chat_template(self, messages, **kwargs):
+            calls.append(kwargs.get('enable_thinking', 'unset'))
+            return 'formatted'
+
+    models.apply_chat_template(Tokenizer(), 'raw')
+    models.apply_chat_template(Tokenizer(), 'raw', enable_thinking=False)
+    assert calls == ['unset', False]
+
+
 def test_base_checkpoint_and_empty_completion():
     tokenizer = BaseTokenizer()
     assert models.apply_chat_template(tokenizer, 'raw') == 'raw'

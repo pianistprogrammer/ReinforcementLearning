@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import sys
 from uuid import uuid4
@@ -27,6 +28,7 @@ class Run:
     status: str = 'running'
     phase: str = 'preparing'
     message: str = 'Starting worker'
+    step: int = 0
     created_at: str = field(default_factory=now)
     finished_at: str | None = None
     seq: int = 0
@@ -41,7 +43,8 @@ class Run:
 
     def summary(self):
         return {'id': self.id, 'config': self.config, 'status': self.status, 'phase': self.phase,
-                'message': self.message, 'created_at': self.created_at, 'finished_at': self.finished_at,
+                'message': self.message, 'step': self.step, 'created_at': self.created_at,
+                'finished_at': self.finished_at,
                 'seq': self.seq, 'metric': self.metrics[-1] if self.metrics else None}
 
     def snapshot(self):
@@ -58,6 +61,8 @@ class Run:
         kind = event['type']
         if kind == 'phase':
             self.phase, self.message = event['phase'], event.get('message', event['phase'])
+            if isinstance(event.get('step'), int):
+                self.step = event['step']
         elif kind == 'status':
             self.status = event['status']
             self.finished_at = event.get('finished_at', self.finished_at)
@@ -98,7 +103,7 @@ class RunManager:
             try:
                 data = json.loads(path.read_text())
                 run = Run(data['id'], data['config'], path.parent)
-                for key in ('status', 'phase', 'message', 'created_at', 'finished_at', 'seq',
+                for key in ('status', 'phase', 'message', 'step', 'created_at', 'finished_at', 'seq',
                             'metrics', 'generations', 'evaluation'):
                     if key in data:
                         setattr(run, key, data[key])
@@ -178,13 +183,17 @@ class RunManager:
 
     async def execute(self, run):
         try:
+            source = Path(__file__).resolve().parents[2]
             env = dict(os.environ, PYTHONUNBUFFERED='1')
-            source = str(Path(__file__).resolve().parents[2])
-            env['PYTHONPATH'] = source + os.pathsep + env.get('PYTHONPATH', '')
+            entries = [str(source), *env.get('PYTHONPATH', '').split(os.pathsep)]
+            env['PYTHONPATH'] = os.pathsep.join(e for e in entries if e)
+            # Workers must not inherit the server's launch directory: it can be a
+            # deleted temp dir, which makes CPython fail at startup (getpath).
             run.process = await asyncio.create_subprocess_exec(
                 sys.executable, '-u', '-m', 'rl_framework.web.worker',
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, start_new_session=True, env=env, limit=1024 * 1024)
+                stderr=asyncio.subprocess.PIPE, start_new_session=True, env=env,
+                cwd=str(source), limit=1024 * 1024)
             run.process.stdin.write(json.dumps({'config': run.config, 'output_dir': str(run.directory / 'artifacts')}).encode() + b'\n')
             await run.process.stdin.drain()
             run.process.stdin.close()
@@ -228,6 +237,24 @@ class RunManager:
             if run.event_file:
                 run.event_file.close()
                 run.event_file = None
+
+    async def delete(self, run_id):
+        if not isinstance(run_id, str) or run_id not in self.runs:
+            raise ValueError('Run not found')
+        run = self.runs[run_id]
+        if run.status in ACTIVE:
+            await self.stop(run_id)
+        directory = Path(run.directory).resolve()
+        if directory.parent != self.root.resolve():
+            raise ValueError('Refusing to delete a run outside the run directory')
+        async with self.lifecycle_lock:
+            self.runs.pop(run_id, None)
+            if run.event_file:
+                run.event_file.close()
+                run.event_file = None
+            await asyncio.to_thread(shutil.rmtree, directory, True)
+        await self.sio.emit('run_list', self.summaries())
+        await self.sio.emit('run_deleted', {'run_id': run_id})
 
     async def close(self):
         await asyncio.gather(*(self.stop(run.id) for run in self.runs.values() if run.status in ACTIVE))

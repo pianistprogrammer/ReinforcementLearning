@@ -130,6 +130,40 @@ def test_single_worker_stop_and_validation_ack(tmp_path):
     asyncio.run(scenario())
 
 
+def test_delete_run_removes_files_and_list_entry(tmp_path):
+    async def scenario():
+        app = create_app(tmp_path)
+        async with TestServer(app, host='127.0.0.1') as server:
+            client = socketio.AsyncClient()
+            finished = asyncio.Event()
+            lists = []
+
+            @client.on('run_event')
+            async def event(data):
+                if data['type'] == 'status' and data['status'] == 'completed':
+                    finished.set()
+
+            @client.on('run_list')
+            async def runs(items):
+                lists.append([item['id'] for item in items])
+
+            await client.connect(str(server.make_url('/')).rstrip('/'))
+            try:
+                response = await client.call('start_run', {'mode': 'demo', 'steps': 2})
+                run = app[MANAGER].runs[response['run_id']]
+                await asyncio.wait_for(finished.wait(), 15)
+                assert run.directory.is_dir()
+                assert (await client.call('delete_run', {'run_id': run.id}, timeout=8))['ok']
+                assert not run.directory.exists()
+                assert run.id not in app[MANAGER].runs
+                assert lists and run.id not in lists[-1]
+                assert not (await client.call('delete_run', {'run_id': run.id}))['ok']
+                assert not (await client.call('delete_run', {'run_id': '../etc'}))['ok']
+            finally:
+                await client.disconnect()
+    asyncio.run(scenario())
+
+
 def test_worker_failure_reaches_browser(tmp_path):
     async def scenario():
         app = create_app(tmp_path)

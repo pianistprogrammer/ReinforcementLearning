@@ -1,11 +1,12 @@
 import {useEffect, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {io, type Socket} from 'socket.io-client';
-import {Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleHelp, Code2, Cpu, FlaskConical, History, Layers3, LoaderCircle, Moon, Play, Plus, Radio, RotateCcw, Settings2, Square, Sun, Terminal, Waypoints, WifiOff, X, Zap} from 'lucide-react';
+import {Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleHelp, Code2, Cpu, FlaskConical, History, Layers3, LoaderCircle, Moon, PanelLeftClose, PanelLeftOpen, Play, Plus, Radio, RotateCcw, Settings2, Square, Sun, Terminal, Trash2, Waypoints, WifiOff, X, Zap} from 'lucide-react';
 import {applyEvent, type Catalog, type Config, type Generation, type HFInspect, type Metric, type Run, type RunEvent, type Summary} from './types';
 import './styles.css';
 
 const HF_TASK = 'hf_generic.HFGenericTask';
+const COMPACT_QUERY = '(max-width: 1050px)';
 const initial: Config = {task: 'game_2048.RL2048', model_id: 'gemma', action: 'train', mode: 'training', steps: 200, group: 4, lr: .000005, max_tokens: 512, temp: .9, lora_rank: 8, lora_layers: 8, allow_unsafe_code: false, task_params: {}};
 const isActive = (status?: string) => status === 'running' || status === 'stopping';
 const number = (value?: number | null, digits = 3) => value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits);
@@ -34,6 +35,18 @@ function App() {
   const [hfDatasetMode, setHfDatasetMode] = useState<'hf' | 'upload'>('hf');
   const [hfUploading, setHfUploading] = useState(false);
   const [theme, setTheme] = useState<'dark'|'light'>(() => (localStorage.getItem('reinforce-theme-v2') as 'dark'|'light') || 'light');
+  const [compact, setCompact] = useState(() => matchMedia(COMPACT_QUERY).matches);
+  const [sidebarPinned, setSidebarPinned] = useState(() => localStorage.getItem('reinforce-sidebar') !== 'collapsed');
+  const [sidebarOverlay, setSidebarOverlay] = useState(false);
+  const sidebarCollapsed = compact ? !sidebarOverlay : !sidebarPinned;
+  useEffect(() => {
+    const query = matchMedia(COMPACT_QUERY);
+    const onChange = (e: MediaQueryListEvent) => {setCompact(e.matches); setSidebarOverlay(false);};
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+  useEffect(() => localStorage.setItem('reinforce-sidebar', sidebarPinned ? 'expanded' : 'collapsed'), [sidebarPinned]);
+  function toggleSidebar() {if (compact) setSidebarOverlay(o => !o); else setSidebarPinned(p => !p);}
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -47,6 +60,7 @@ function App() {
   }
   const socket = useRef<Socket | null>(null);
   const selected = useRef<string | null>(null);
+  const loadedConfig = useRef<string | null>(null);
   const output = useRef<HTMLPreElement>(null);
   const form = useRef<HTMLFormElement>(null);
 
@@ -58,7 +72,7 @@ function App() {
     s.on('disconnect', () => setConnected(false));
     s.on('connect_error', () => {setConnected(false); setError('Cannot reach the backend. Reconnecting automatically…');});
     s.on('run_list', (items: Summary[]) => {setRuns(items); if (!selected.current && items.length) {selected.current = items[0].id; s.emit('watch_run', {run_id: items[0].id});}});
-    s.on('run_snapshot', (snapshot: Run) => {if (selected.current && selected.current !== snapshot.id) return; selected.current = snapshot.id; setRun(old => old?.id === snapshot.id && old.seq > snapshot.seq ? old : snapshot);});
+    s.on('run_snapshot', (snapshot: Run) => {if (selected.current && selected.current !== snapshot.id) return; selected.current = snapshot.id; setRun(old => old?.id === snapshot.id && old.seq > snapshot.seq ? old : snapshot); if (loadedConfig.current !== snapshot.id) {loadedConfig.current = snapshot.id; restoreConfig(snapshot.config);}});
     s.on('run_event', (event: RunEvent) => setRun(old => old ? applyEvent(old, event) : old));
     s.connect();
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
@@ -71,7 +85,9 @@ function App() {
   const metric = run?.metrics.at(-1);
   const total = metric?.steps ?? (run?.config.mode === 'demo' ? Math.min(run.config.steps, 12) : run?.config.steps ?? config.steps);
   const tracksSteps = !run || run.config.mode === 'demo' || run.config.action === 'train';
-  const progress = tracksSteps ? Math.min(100, ((metric?.step ?? 0) / total) * 100) : run?.status === 'completed' ? 100 : 0;
+  const completedSteps = metric?.step ?? 0;
+  const currentStep = Math.max(run?.step ?? 0, completedSteps);
+  const progress = tracksSteps ? Math.min(100, (completedSteps / total) * 100) : run?.status === 'completed' ? 100 : 0;
 
   function watch(id: string) {selected.current = id; setGenerationId(null); setPage('workspace'); socket.current?.timeout(10000).emit('watch_run', {run_id: id}, (err: Error | null, data: {ok: boolean; error?: string}) => {if (err || !data?.ok) setError(data?.error || 'Could not open the run');});}
   function launch(demo = false) {
@@ -87,6 +103,23 @@ function App() {
   function stop() {if (!run || !isActive(run.status)) return; setPending(true); socket.current?.timeout(12000).emit('stop_run', {run_id: run.id}, (err: Error | null, data: {ok: boolean; error?: string}) => {setPending(false); if (err || !data?.ok) setError(data?.error || 'Stop request failed. Reconnect and try again.');});}
   function newRun() {setPage('workspace'); requestAnimationFrame(() => {form.current?.scrollIntoView({behavior:'smooth', block:'start'}); form.current?.querySelector('select')?.focus({preventScroll:true});});}
   function update<K extends keyof Config>(key: K, value: Config[K]) {setConfig(c => ({...c, [key]: value}));}
+  function restoreConfig(next: Config) {
+    const params = next.task_params ?? {};
+    setConfig({...initial, ...next, task_params: {...params}, allow_unsafe_code: false});
+    setHfInspect(null);
+    setHfDatasetMode(next.task === HF_TASK && String(params.dataset_id ?? '').startsWith('/') ? 'upload' : 'hf');
+  }
+  function removeRun(id: string) {
+    if (!window.confirm('Delete this run and its saved logs and artifacts? This cannot be undone.')) return;
+    socket.current?.timeout(10000).emit('delete_run', {run_id: id}, (err: Error | null, data: {ok: boolean; error?: string}) => {
+      if (err || !data?.ok) {setError(data?.error || 'Could not delete the run'); return;}
+      if (run?.id === id) {
+        loadedConfig.current = null; selected.current = null; setRun(null); setGenerationId(null);
+        const next = runs.find(item => item.id !== id);
+        if (next) watch(next.id);
+      }
+    });
+  }
 
   async function inspectHF() {
     const id = config.task_params.dataset_id ?? '';
@@ -122,22 +155,23 @@ function App() {
   const canExecute = config.action === 'preview' || config.action === 'demo' || config.allow_unsafe_code || (isHF && !isHFCustom);
   const hfReady = !isHF || (!!config.task_params.dataset_id && (config.action === 'preview' || (!!config.task_params.question_col && !!config.task_params.answer_col && !!config.task_params.reward_type && (config.task_params.reward_type !== 'custom' || !!config.task_params.reward_module))));
 
-  return <div className="app-shell">
-    <aside className="sidebar">
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    {compact && sidebarOverlay && <div className="sidebar-backdrop" onClick={() => setSidebarOverlay(false)}/>}
+    <aside className="sidebar" id="sidebar" onClick={e => {if (compact && (e.target as HTMLElement).closest('button')) setSidebarOverlay(false);}}>
       <a className="brand" href="/" aria-label="Reinforce home"><div className="brand-mark"><Waypoints size={23}/></div><span>reinforce<span className="brand-period">.</span></span></a>
       <div className="workspace-label"><span className="workspace-avatar">RL</span><div>Local workspace<small>Apple silicon · MLX</small></div><span className="local-dot"/></div>
       <div className="nav-label">WORKSPACE</div>
       <nav aria-label="Main navigation"><button className={page === 'workspace' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('workspace')}><Activity size={17}/>Run workspace<ArrowUpRight size={14}/></button><button className={page === 'history' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('history')}><History size={17}/>Run history<span className="count">{runs.length}</span></button></nav>
       <div className="recent-header"><span className="nav-label">RECENT RUNS</span><button className="icon-button" aria-label="Configure a new run" onClick={newRun}><Plus size={15}/></button></div>
-      <div className="recent-runs">{runs.slice(0, 7).map(item => <button key={item.id} onClick={() => watch(item.id)} className={`recent-run ${run?.id === item.id ? 'selected' : ''}`}><span className={`status-dot ${item.status}`}/><div>{item.config.mode === 'demo' ? 'Demo stream' : taskName(item.config.task)}<small>{modelName(item.config.model_id)} <span>· {item.id.slice(0,6)}</span></small></div></button>)}{!runs.length && <div className="empty-recent">Your experiments will<br/>appear here.</div>}</div>
+      <div className="recent-runs">{runs.slice(0, 7).map(item => <div key={item.id} className={`recent-run-row ${run?.id === item.id ? 'selected' : ''}`}><button onClick={() => watch(item.id)} className={`recent-run ${run?.id === item.id ? 'selected' : ''}`}><span className={`status-dot ${item.status}`}/><div>{item.config.mode === 'demo' ? 'Demo stream' : taskName(item.config.task)}<small>{modelName(item.config.model_id)} <span>· {item.id.slice(0,6)}</span></small></div></button><button className="delete-run" title="Delete run" aria-label={`Delete run ${item.id}`} onClick={() => removeRun(item.id)}><Trash2 size={13}/></button></div>)}{!runs.length && <div className="empty-recent">Your experiments will<br/>appear here.</div>}</div>
       <div className="sidebar-bottom"><div className="local-notice"><Cpu size={17}/><div>Built to run locally<small>Your compute. Your workspace.</small></div></div><button className="help-button" onClick={() => setHelp(true)}><CircleHelp size={17}/>Workspace guide<ArrowUpRight size={14}/></button></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{page === 'history' ? 'Run history' : 'Run workspace'}</strong></div><div className="topbar-right"><div className={`connection ${connected ? '' : 'offline'}`}>{connected ? <span className="live-dot"/> : <WifiOff size={13}/>} {connected ? 'Backend connected' : 'Reconnecting'}<span className="connection-divider"/><span>LOCAL</span></div><button className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? <Sun size={16}/> : <Moon size={16}/>}</button></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button sidebar-toggle" onClick={toggleSidebar} aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Open sidebar' : 'Collapse sidebar'}>{sidebarCollapsed ? <PanelLeftOpen size={16}/> : <PanelLeftClose size={16}/>}</button><div className="breadcrumb">Workspace <span>/</span> <strong>{page === 'history' ? 'Run history' : 'Run workspace'}</strong></div></div><div className="topbar-right"><div className={`connection ${connected ? '' : 'offline'}`}>{connected ? <span className="live-dot"/> : <WifiOff size={13}/>} {connected ? 'Backend connected' : 'Reconnecting'}<span className="connection-divider"/><span>LOCAL</span></div><button className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>{theme === 'dark' ? <Sun size={16}/> : <Moon size={16}/>}</button></div></header>
       <main>
         <div className="page-heading"><div><div className="eyebrow">EXPERIMENT CONTROL</div><h1>{page === 'history' ? 'Run history' : 'Run workspace'}</h1><p>{page === 'history' ? 'Every experiment, ready to revisit.' : 'From the first token to the final update. Follow it all, live.'}</p></div><div className="heading-actions"><button className="mobile-history" aria-label="Run history" onClick={() => setPage(page === 'history' ? 'workspace' : 'history')}><History size={15}/></button><button className="secondary-button" onClick={newRun}><Plus size={16}/>New run</button></div></div>
         {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16}/></button></div>}
-        {page === 'history' ? <section className="panel history-panel"><div className="panel-heading"><h2>All experiments</h2><span className="muted">{runs.length} runs</span></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Experiment</th><th>Model</th><th>Status</th><th>Steps</th><th>Duration</th><th/></tr></thead><tbody>{runs.map(item => <tr key={item.id}><td><strong>{item.config.mode === 'demo' ? 'Demo stream' : taskName(item.config.task)}</strong><small className="mono">{item.id}</small></td><td>{modelName(item.config.model_id)}</td><td><Status status={item.status}/></td><td className="mono">{item.config.mode === 'demo' || item.config.action === 'train' ? `${item.metric?.step ?? 0} / ${item.config.mode === 'demo' ? Math.min(item.config.steps,12) : item.config.steps}` : '—'}</td><td className="mono">{elapsed(item, clock)}</td><td><button className="text-button" onClick={() => watch(item.id)}>Open <ArrowUpRight size={14}/></button></td></tr>)}</tbody></table></div> : <Empty icon={<History/>} title="A clean slate" detail="Start your first run or try the demo stream to see it here."/>}</section> : <div className="workspace-grid">
+        {page === 'history' ? <section className="panel history-panel"><div className="panel-heading"><h2>All experiments</h2><span className="muted">{runs.length} runs</span></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Experiment</th><th>Model</th><th>Status</th><th>Steps</th><th>Duration</th><th/></tr></thead><tbody>{runs.map(item => <tr key={item.id}><td><strong>{item.config.mode === 'demo' ? 'Demo stream' : taskName(item.config.task)}</strong><small className="mono">{item.id}</small></td><td>{modelName(item.config.model_id)}</td><td><Status status={item.status}/></td><td className="mono">{item.config.mode === 'demo' || item.config.action === 'train' ? `${item.metric?.step ?? 0} / ${item.config.mode === 'demo' ? Math.min(item.config.steps,12) : item.config.steps}` : '—'}</td><td className="mono">{elapsed(item, clock)}</td><td className="row-actions"><button className="icon-button history-delete" title="Delete run" aria-label={`Delete run ${item.id}`} onClick={() => removeRun(item.id)}><Trash2 size={14}/></button><button className="text-button" onClick={() => watch(item.id)}>Open <ArrowUpRight size={14}/></button></td></tr>)}</tbody></table></div> : <Empty icon={<History/>} title="A clean slate" detail="Start your first run or try the demo stream to see it here."/>}</section> : <div className="workspace-grid">
           <form ref={form} className="panel configuration" onSubmit={(e: FormEvent) => {e.preventDefault(); launch();}}>
             <div className="panel-heading"><h2><Settings2 size={16}/>Run configuration</h2><span className="mono subtle">01</span></div>
             <div className="config-body">
@@ -177,12 +211,12 @@ function App() {
             </div>
           </form>
           <div className="run-workspace">
-            <section className="panel run-overview"><div className="run-title-row"><div className="run-title-icon"><Radio size={20}/></div><div className="run-title"><div><h2>{run ? run.config.mode === 'demo' ? 'Demo stream' : taskName(run.config.task) : 'Ready for your next experiment'}</h2>{run?.config.mode === 'demo' && <span className="demo-badge">SIMULATED</span>}</div><p>{run ? <><span className="mono">{run.id}</span><span> / </span>{modelName(run.config.model_id)}<span> / </span>{label(run.config.action)}</> : 'Configure a run, or explore the live demo.'}</p></div>{run ? <Status status={run.status}/> : <span className="status idle"><span className="status-dot"/>Idle</span>}{run && isActive(run.status) && <button className="stop-button" onClick={stop} disabled={pending || !connected || run.status === 'stopping'}><Square size={11} fill="currentColor"/>{run.status === 'stopping' ? 'Stopping' : 'Stop'}</button>}</div><div className="run-progress"><div><span className={isActive(run?.status) ? 'live-text' : ''}>{isActive(run?.status) && <span className="live-dot"/>}{run?.message ?? 'Waiting for a run'}</span><span className="mono">{elapsed(run,clock)} <span className="muted">elapsed</span></span></div><div className="progress-track"><div style={{width: `${progress}%`}}/></div><div className="progress-label"><span>{tracksSteps ? `${metric?.step ?? 0} of ${total} steps` : run?.status === 'completed' ? 'Task finished' : 'Task progress'}</span><span>{Math.round(progress)}%</span></div></div></section>
-            <div className="metrics-grid"><MetricCard icon={<Layers3 size={15}/>} title="TRAINING STEP" value={String(metric?.step ?? '—')} suffix={tracksSteps ? `/ ${total}` : undefined} foot={run?.config.mode === 'demo' ? 'Simulated updates' : 'Completed updates'}/><MetricCard icon={<Activity size={15}/>} title="MEAN REWARD" value={number(metric?.mean_reward)} foot="Across the sample group" accent/><MetricCard icon={<Waypoints size={15}/>} title="LOSS" value={number(metric?.loss)} foot="Sequence objective"/><MetricCard icon={<Zap size={15}/>} title="GENERATION" value={number(latest?.tokens_per_second,1)} suffix="tok/s" foot={latest?.peak_memory_gb ? `${number(latest.peak_memory_gb,2)} GB peak memory` : 'Latest completion'}/></div>
-            <section className="panel chart-panel"><div className="panel-heading"><h2>Training trajectory<span className="panel-subtitle">{run?.config.mode === 'demo' ? 'SIMULATED' : 'LIVE METRICS'}</span></h2><div className="segmented"><button className={chart === 'mean_reward' ? 'chosen' : ''} onClick={() => setChart('mean_reward')}>Reward</button><button className={chart === 'loss' ? 'chosen' : ''} onClick={() => setChart('loss')}>Loss</button></div></div><Chart metrics={run?.metrics ?? []} metric={chart}/></section>
+            <section className="panel run-overview"><div className="run-title-row"><div className="run-title-icon"><Radio size={20}/></div><div className="run-title"><div><h2>{run ? run.config.mode === 'demo' ? 'Demo stream' : taskName(run.config.task) : 'Ready for your next experiment'}</h2>{run?.config.mode === 'demo' && <span className="demo-badge">SIMULATED</span>}</div><p>{run ? <><span className="mono">{run.id}</span><span> / </span>{modelName(run.config.model_id)}<span> / </span>{label(run.config.action)}</> : 'Configure a run, or explore the live demo.'}</p></div>{run ? <Status status={run.status}/> : <span className="status idle"><span className="status-dot"/>Idle</span>}{run && isActive(run.status) && <button className="stop-button" onClick={stop} disabled={pending || !connected || run.status === 'stopping'}><Square size={11} fill="currentColor"/>{run.status === 'stopping' ? 'Stopping' : 'Stop'}</button>}</div><div className="run-progress"><div><span className={isActive(run?.status) ? 'live-text' : ''}>{isActive(run?.status) && <span className="live-dot"/>}{run?.message ?? 'Waiting for a run'}</span><span className="mono">{elapsed(run,clock)} <span className="muted">elapsed</span></span></div><div className="progress-track"><div style={{width: `${progress}%`}}/></div><div className="progress-label"><span>{tracksSteps ? `Step ${currentStep} of ${total}` : run?.status === 'completed' ? 'Task finished' : 'Task progress'}</span><span>{Math.round(progress)}%</span></div></div></section>
+            <div className="metrics-grid"><MetricCard icon={<Layers3 size={15}/>} title="TRAINING STEP" value={currentStep ? String(currentStep) : '—'} suffix={tracksSteps ? `/ ${total}` : undefined} foot={`${run?.config.mode === 'demo' ? 'Simulated' : 'Completed'} updates: ${completedSteps}`}/><MetricCard icon={<Activity size={15}/>} title="MEAN REWARD" value={number(metric?.mean_reward)} foot="Across the sample group" accent/><MetricCard icon={<Waypoints size={15}/>} title="LOSS" value={number(metric?.loss)} foot="Sequence objective"/><MetricCard icon={<Zap size={15}/>} title="GENERATION" value={number(latest?.tokens_per_second,1)} suffix="tok/s" foot={latest?.peak_memory_gb ? `${number(latest.peak_memory_gb,2)} GB peak memory` : 'Latest completion'}/></div>
+            <div className="data-panels"><section className="panel chart-panel"><div className="panel-heading"><h2>Training trajectory<span className="panel-subtitle">{run?.config.mode === 'demo' ? 'SIMULATED' : 'LIVE METRICS'}</span></h2><div className="segmented"><button className={chart === 'mean_reward' ? 'chosen' : ''} onClick={() => setChart('mean_reward')}>Reward</button><button className={chart === 'loss' ? 'chosen' : ''} onClick={() => setChart('loss')}>Loss</button></div></div><Chart metrics={run?.metrics ?? []} metric={chart}/></section>
             <section className="panel stream-panel"><div className="stream-heading"><div className="tabs" role="tablist" aria-label="Run output">{[{id:'completions',name:'Completions',icon:<Code2 size={15}/>},{id:'logs',name:'Backend logs',icon:<Terminal size={15}/>},{id:'config',name:'Run details',icon:<Settings2 size={15}/>}].map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? 'selected' : ''} onClick={() => setTab(t.id)}>{t.icon}{t.name}{t.id === 'completions' && !!run?.generations.length && <span className="tab-count">{run.generations.length}</span>}</button>)}</div>{run && <a className="icon-button" href={`/api/runs/${run.id}/events`} title="Download complete event log" aria-label="Download event log"><ArrowDownToLine size={16}/></a>}</div>
               {tab === 'completions' ? <><div className="stream-toolbar"><div className="code-file"><span className="python-dot"/>completion.py{generation && <span className="muted mono">{generation.tokens} tokens</span>}</div><div className="stream-controls">{!!run?.generations.length && <select aria-label="Select completion" value={generationId ?? ''} onChange={e => setGenerationId(e.target.value || null)}><option value="">Follow latest</option>{run.generations.map((g,i) => <option key={g.generation_id} value={g.generation_id}>{g.step ? `Step ${g.step}` : g.phase ?? 'Eval'} · sample {g.sample_index+1} ({i+1})</option>)}</select>}<label className="follow-control"><input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)}/>Auto-scroll</label></div></div>{generation ? <><pre className="code-output" ref={output}><code>{generation.text}{!generation.done && isActive(run?.status) && <span className="cursor"/>}</code></pre><div className="stream-footer"><span><span className={`status-dot ${!generation.done && isActive(run?.status) ? 'running' : ''}`}/>{generation.done ? 'Completion received' : isActive(run?.status) ? 'Receiving tokens' : 'Generation interrupted'}<span className="muted">· Sample {generation.sample_index+1} of {generation.group_size}</span></span><span className="mono subtle">SOCKET.IO</span></div><details className="prompt-details"><summary>View source prompt<ChevronDown size={13}/></summary><pre>{generation.prompt}</pre></details></> : <Empty icon={<Code2 size={27}/>} title="Every token, as it happens" detail="Generated completions will stream here directly from the backend." extra={<span className="empty-shortcut"><Radio size={12}/>LIVE TOKEN STREAM</span>}/>}</> : tab === 'logs' ? <><div className="stream-toolbar"><span className="code-file"><Terminal size={14}/>Worker stdout + stderr</span><label className="follow-control"><input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)}/>Auto-scroll</label></div>{run?.logs.length ? <pre className="log-output" ref={output}>{run.logs.map(log => <span key={log.seq}>{log.text}</span>)}</pre> : <Empty icon={<Terminal/>} title="Listening to the backend" detail="Worker logs, loading progress, and errors appear here."/>}</> : <div className="run-details">{run ? <><div className="details-heading"><span className="section-label">RUN CONFIGURATION</span><span className="mono subtle">{run.id}</span></div><dl>{Object.entries(run.config).filter(([k]) => k !== 'task_params').map(([key,value]) => <div key={key}><dt>{label(key)}</dt><dd>{String(value)}</dd></div>)}{run.config.task === HF_TASK && Object.entries(run.config.task_params).map(([k,v]) => <div key={k}><dt>{label(k)}</dt><dd className="mono">{String(v)}</dd></div>)}</dl>{run.evaluation != null && <><div className="section-label">LATEST EVALUATION</div><pre>{JSON.stringify(run.evaluation,null,2)}</pre></>}</> : <Empty icon={<Settings2/>} title="Your run, recorded" detail="Settings and evaluation results will be saved with the run."/>}</div>}
-            </section><div className="workspace-footnote"><span><span className="status-dot"/>Local compute. Live connection.</span><span>MLX-LM <span className="subtle">/</span> Experimental GRPO</span></div>
+            </section></div><div className="workspace-footnote"><span><span className="status-dot"/>Local compute. Live connection.</span><span>MLX-LM <span className="subtle">/</span> Experimental GRPO</span></div>
           </div>
         </div>}
       </main>
@@ -197,14 +231,23 @@ function Empty({icon,title,detail,extra}: {icon: ReactNode; title: string; detai
 function MetricCard({icon,title,value,suffix,foot,accent}: {icon: ReactNode; title: string; value: string; suffix?: string; foot: string; accent?: boolean}) {return <section className={`metric-card ${accent ? 'accent' : ''}`}><div className="metric-title">{title}{icon}</div><div className="metric-value mono">{value}<span>{suffix}</span></div><p>{foot}</p></section>;}
 function Chart({metrics,metric}: {metrics: Metric[]; metric: 'mean_reward' | 'loss'}) {
   const data = metrics.filter(m => Number.isFinite(m[metric]));
-  const width = 740, height = 200, left = 46, right = 16, top = 18, bottom = 28;
+  const svg = useRef<SVGSVGElement>(null);
+  const [size, setSize] = useState({width: 740, height: 200});
+  useEffect(() => {
+    const element = svg.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setSize({width: Math.max(240, Math.round(entry.contentRect.width)), height: Math.max(120, Math.round(entry.contentRect.height))}));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const {width, height} = size, left = 44, right = 10, top = 18, bottom = 28;
   const values = data.map(m => m[metric]);
   const min = Math.min(0,...values), max = Math.max(1,...values), span = max-min || 1;
   const lastStep = Math.max(1,data.at(-1)?.step ?? 200);
   const x = (step: number) => left + ((step-1) / Math.max(1,lastStep-1))*(width-left-right);
   const y = (v: number) => top + (1-(v-min)/span)*(height-top-bottom);
   const points = data.map(m => `${x(m.step)},${y(m[metric])}`).join(' ');
-  return <div className="chart-wrap"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric === 'loss' ? 'Loss' : 'Mean reward'} by training step`}><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style={{stopColor:'var(--chart-line)'}} stopOpacity=".28"/><stop offset="100%" style={{stopColor:'var(--chart-line)'}} stopOpacity="0"/></linearGradient></defs>{[0,.25,.5,.75,1].map(v => <g key={v}><line className="chart-grid" x1={left} x2={width-right} y1={y(min+v*span)} y2={y(min+v*span)}/><text x={left-8} y={y(min+v*span)+4} textAnchor="end">{(min+v*span).toFixed(2)}</text></g>)}{[0,.25,.5,.75,1].map(v => <text key={v} x={left+v*(width-left-right)} y={height-6} textAnchor="middle">{Math.round(1+v*(lastStep-1))}</text>)}{!!data.length && <><polygon points={`${x(data[0].step)},${height-bottom} ${points} ${x(lastStep)},${height-bottom}`} fill="url(#chart-fill)"/><polyline className="chart-line" points={points} fill="none" strokeWidth="2" strokeLinejoin="round"/>{data.map(m => <circle className="chart-dot" key={m.step} cx={x(m.step)} cy={y(m[metric])} r={data.length < 30 ? 3.5 : 1.5}><title>Step {m.step}: {m[metric].toFixed(4)}</title></circle>)}</>}</svg>{!data.length && <div className="chart-empty"><Activity size={17}/><span>Metrics appear after the first training step</span></div>}<div className="chart-caption"><span><i/>{metric === 'loss' ? 'Sequence loss' : 'Mean group reward'}</span><span>Training step</span></div></div>;
+  return <div className="chart-wrap"><div className="chart-legend"><span><i/>{metric === 'loss' ? 'Sequence loss' : 'Mean group reward'}</span></div><svg ref={svg} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${metric === 'loss' ? 'Loss' : 'Mean reward'} by training step`}><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style={{stopColor:'var(--chart-line)'}} stopOpacity=".28"/><stop offset="100%" style={{stopColor:'var(--chart-line)'}} stopOpacity="0"/></linearGradient></defs>{[0,.25,.5,.75,1].map(v => <g key={v}><line className="chart-grid" x1={left} x2={width-right} y1={y(min+v*span)} y2={y(min+v*span)}/><text x={left-8} y={y(min+v*span)+4} textAnchor="end">{(min+v*span).toFixed(2)}</text></g>)}{[0,.25,.5,.75,1].map(v => <text key={v} x={left+v*(width-left-right)} y={height-6} textAnchor={v===0?'start':v===1?'end':'middle'}>{Math.round(1+v*(lastStep-1))}</text>)}{!!data.length && <><polygon points={`${x(data[0].step)},${height-bottom} ${points} ${x(lastStep)},${height-bottom}`} fill="url(#chart-fill)"/><polyline className="chart-line" points={points} fill="none" strokeWidth="2" strokeLinejoin="round"/>{data.map(m => <circle className="chart-dot" key={m.step} cx={x(m.step)} cy={y(m[metric])} r={data.length < 30 ? 3.5 : 1.5}><title>Step {m.step}: {m[metric].toFixed(4)}</title></circle>)}</>}</svg>{!data.length && <div className="chart-empty"><Activity size={17}/><span>Metrics appear after the first training step</span></div>}<div className="chart-caption"><span>Training step</span></div></div>;
 }
 
 createRoot(document.getElementById('root')!).render(<App/>);

@@ -77,21 +77,24 @@ def _has_chat_template(tokenizer) -> bool:
     )
 
 
-def apply_chat_template(tokenizer, prompt: str) -> str:
+def apply_chat_template(tokenizer, prompt: str, *, enable_thinking: bool | None = None) -> str:
     """Format one raw user prompt using the checkpoint's own chat template."""
     if _has_chat_template(tokenizer):
         messages = [{"role": "user", "content": prompt}]
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # Templates without thinking support ignore the extra variable.
+        extra = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        return tokenizer.apply_chat_template(messages, tokenize=False,
+                                             add_generation_prompt=True, **extra)
     return prompt
 
 
-def encode_prompt(tokenizer, prompt: str) -> List[int]:
+def encode_prompt(tokenizer, prompt: str, *, enable_thinking: bool | None = None) -> List[int]:
     """Use identical prompt IDs for sampling and scoring, with BOS added once.
 
     Chat templates include their own special tokens (notably Gemma's BOS).
     Base checkpoints without a chat template retain normal tokenizer encoding.
     """
-    formatted = apply_chat_template(tokenizer, prompt)
+    formatted = apply_chat_template(tokenizer, prompt, enable_thinking=enable_thinking)
     if _has_chat_template(tokenizer):
         ids = tokenizer.encode(formatted, add_special_tokens=False)
     else:
@@ -109,6 +112,7 @@ def sample_group(
     group_size: int = 8,
     max_tokens: int = 512,
     temperature: float = 0.8,
+    enable_thinking: bool | None = None,
 ) -> Tuple[List[str], List[List[int]]]:
     """Return generated text and the exact sampled IDs, including a sampled EOS."""
     if group_size < 1 or max_tokens < 1:
@@ -117,7 +121,7 @@ def sample_group(
         raise ValueError("temperature must be non-negative")
     completions, token_ids_list = [], []
     sampler = make_sampler(temp=temperature)
-    prompt_ids = encode_prompt(tokenizer, prompt)
+    prompt_ids = encode_prompt(tokenizer, prompt, enable_thinking=enable_thinking)
     for sample_index in range(group_size):
         generation_id = uuid4().hex
         emit("generation_start", generation_id=generation_id, sample_index=sample_index,
@@ -138,11 +142,12 @@ def sample_group(
     return completions, token_ids_list
 
 
-def sequence_logprobs(model, tokenizer, prompt: str, completion_ids: List[int]):
+def sequence_logprobs(model, tokenizer, prompt: str, completion_ids: List[int], *,
+                      enable_thinking: bool | None = None):
     """Sum of token log-probs of a completion under model, conditioned on prompt."""
     if not len(completion_ids):
         return mx.array(0.0)
-    prompt_ids = encode_prompt(tokenizer, prompt)
+    prompt_ids = encode_prompt(tokenizer, prompt, enable_thinking=enable_thinking)
     full_ids = mx.array([prompt_ids + list(completion_ids)])
     logits = model(full_ids[:, :-1])
     logprobs = nn.log_softmax(logits, axis=-1)

@@ -66,6 +66,16 @@ def create_app(run_dir=None, static_dir=None):
         except ValueError as exc:
             return {'ok': False, 'error': str(exc)}
 
+    @sio.on('delete_run')
+    async def delete_run(sid, data):
+        try:
+            await manager.delete(data.get('run_id') if isinstance(data, dict) else None)
+            return {'ok': True}
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}
+        except OSError as exc:
+            return {'ok': False, 'error': f'Could not remove the run files: {exc}'}
+
     async def catalog(request):
         return web.json_response({'models': MODEL_PRESETS, 'tasks': TASKS,
                                   'active_run': next((r.id for r in manager.runs.values() if r.status in {'running', 'stopping'}), None)})
@@ -85,6 +95,15 @@ def create_app(run_dir=None, static_dir=None):
             raise web.HTTPNotFound()
         return web.FileResponse(run.directory / 'events.jsonl', headers={
             'Content-Disposition': f'attachment; filename="{run.id}-events.jsonl"'})
+
+    async def delete_run_http(request):
+        try:
+            await manager.delete(request.match_info['run_id'])
+        except ValueError as exc:
+            raise web.HTTPNotFound(text=str(exc))
+        except OSError as exc:
+            raise web.HTTPInternalServerError(text=str(exc))
+        return web.json_response({'ok': True})
 
     async def hf_inspect(request):
         dataset_id = request.rel_url.query.get('dataset', '').strip()
@@ -160,6 +179,7 @@ def create_app(run_dir=None, static_dir=None):
     app.router.add_get('/api/runs', runs)
     app.router.add_get('/api/runs/{run_id}', snapshot)
     app.router.add_get('/api/runs/{run_id}/events', events)
+    app.router.add_delete('/api/runs/{run_id}', delete_run_http)
     app.router.add_get('/api/hf_inspect', hf_inspect)
     app.router.add_post('/api/upload_dataset', upload_dataset)
     app.router.add_get('/', index)

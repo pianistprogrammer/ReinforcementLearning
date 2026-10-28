@@ -3,6 +3,7 @@ from __future__ import annotations
 import re, random
 import html
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -92,9 +93,10 @@ class RL2048(RLTask):
     executes_generated_code = True
     defaults = {'steps': 200, 'group': 4, 'lr': 5e-6, 'max_tokens': 2048, 'temp': .9}
 
-    def __init__(self, *, allow_unsafe_code=False, timeout=5):
+    def __init__(self, *, allow_unsafe_code=False, timeout=5, enable_thinking=False):
         self.allow_unsafe_code = allow_unsafe_code
         self.timeout = timeout
+        self.enable_thinking = enable_thinking
 
     def require_execution(self):
         if not self.allow_unsafe_code:
@@ -127,14 +129,18 @@ def strategy(board):
 
     def execute(self, completion, *, final=False):
         self.require_execution()
+        project_root = str(Path(__file__).resolve().parents[2])
+        env = dict(os.environ)
+        env['PYTHONPATH'] = project_root + os.pathsep + env.get('PYTHONPATH', '')
         with tempfile.TemporaryDirectory() as directory:
             request = Path(directory) / 'request.json'
             response = Path(directory) / 'response.json'
             request.write_text(json.dumps({'completion': completion, 'final': final}))
             try:
-                subprocess.run([sys.executable, '-m', 'rl_framework.tasks.game_2048',
+                subprocess.run([os.path.abspath(sys.executable), '-m', 'rl_framework.tasks.game_2048',
                                 str(request), str(response)], timeout=self.timeout,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+                               cwd=project_root, env=env)
                 return json.loads(response.read_text())
             except subprocess.TimeoutExpired:
                 return {'reward': 0.0, 'info': {'reason': 'timeout'}}
@@ -147,7 +153,8 @@ def strategy(board):
         baseline = phase == 'baseline'
         completions, _ = sample_group(model, tokenizer, self.make_prompt(tokenizer),
                                       group_size=3, max_tokens=2048 if baseline else 512,
-                                      temperature=.7 if baseline else .3)
+                                      temperature=.7 if baseline else .3,
+                                      enable_thinking=self.enable_thinking)
         results = []
         for index, completion in enumerate(completions):
             result = self.execute(completion, final=not baseline)

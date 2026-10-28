@@ -23,6 +23,7 @@ def grpo_step(
     rewards: list[float],
     *,
     beta: float = 0.1,
+    enable_thinking: bool | None = None,
 ) -> float:
     rewards = np.array(rewards, dtype=np.float32)
     adv = (rewards - rewards.mean()) / (rewards.std() + 1e-4)
@@ -35,8 +36,10 @@ def grpo_step(
         model.update(tree_unflatten(list(lora_params.items())))
         total = mx.array(0.0)
         for comp_ids, a in zip(token_ids_list, adv):
-            lp = sequence_logprobs(model, tokenizer, prompt, comp_ids)
-            ref_lp = mx.stop_gradient(sequence_logprobs(ref_model, tokenizer, prompt, comp_ids))
+            lp = sequence_logprobs(model, tokenizer, prompt, comp_ids,
+                                   enable_thinking=enable_thinking)
+            ref_lp = mx.stop_gradient(sequence_logprobs(ref_model, tokenizer, prompt, comp_ids,
+                                                        enable_thinking=enable_thinking))
             kl = lp - ref_lp
             total = total + (-(float(a) * lp) + beta * kl)
         return total / len(completions)

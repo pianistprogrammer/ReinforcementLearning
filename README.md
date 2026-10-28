@@ -114,8 +114,9 @@ production UI. Frontend development/builds require Node 20.19+ or 22.12+; `npm t
 built-in TypeScript support. Web tests run with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q tests/test_web.py`
 after installing the web and test extras.
 
-Socket.IO commands are `start_run` (settings object), `watch_run` (`{run_id}`), and `stop_run`
-(`{run_id}`). Each acknowledges with `{ok, error?}`. The server sends `run_list` summaries,
+Socket.IO commands are `start_run` (settings object), `watch_run` (`{run_id}`), `stop_run`
+(`{run_id}`), and `delete_run` (`{run_id}`, removes the saved run directory). Each acknowledges with
+`{ok, error?}`. `DELETE /api/runs/{run_id}` does the same over HTTP. The server sends `run_list` summaries,
 `run_snapshot` for the selected run, and `run_event` updates with `run_id`, monotonically increasing
 `seq`, UTC `timestamp`, and `type`. Event types include `phase`, `generation_start`, `token`,
 `generation_end`, `metric`, `evaluation`, `log`, and `status`. Snapshots plus sequence checks
